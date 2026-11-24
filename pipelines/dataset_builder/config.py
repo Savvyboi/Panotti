@@ -99,8 +99,6 @@ CLASS_OSINT_QUERIES: dict[str, list[str]] = {
         "city street traffic ambient clip",
         "air raid siren Ukraine sound clip",
         "civil defense siren sound effect",
-        "Cessna 172 propeller flyover sound",
-        "helicopter rotor flying overhead sound",
     ],
 }
 
@@ -118,6 +116,18 @@ EXCLUDED_TITLE_KEYWORDS: tuple[str, ...] = (
     "8 hours",
     "sleep sound",
     "white noise for sleeping",
+    "what you need to know",
+    "how to build",
+    "maintenance",
+    "hints & tips",
+    "tutorial",
+    "startup sound",
+    "wont stop beeping",
+    "earrape",
+    "sound like gas",
+    "suspense drone",
+    "spitfire",
+    "jet cat",
 )
 
 CLASS_CLEANING_PROFILES: dict[str, dict[str, Any]] = {

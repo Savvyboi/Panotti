@@ -158,6 +158,7 @@ def export_quantized_onnx(
         model_input=str(fp32_path),
         model_output=str(int8_path),
         weight_type=QuantType.QUInt8,
+        op_types_to_quantize=["MatMul", "Gemm"],
     )
 
     int8_bytes = int8_path.stat().st_size
@@ -202,7 +203,11 @@ def export_quantized_onnx(
             "eps": EPS,
         },
         "validation_metrics": {
+            "data_source": val_metrics.get("data_source", checkpoint.get("data_source")),
+            "split_strategy": val_metrics.get("split_strategy", checkpoint.get("split_strategy")),
             "best_val_accuracy": val_metrics.get("best_val_accuracy"),
+            "val_video_accuracy": val_metrics.get("val_video_accuracy", checkpoint.get("val_video_accuracy")),
+            "macro_f1": val_metrics.get("macro_f1", checkpoint.get("macro_f1")),
             "shahed_val_accuracy": val_metrics.get("shahed_val_accuracy"),
             "per_class_accuracy": val_metrics.get("per_class_accuracy", {}),
         },

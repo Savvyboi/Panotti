@@ -179,6 +179,17 @@ def test_verify_harmonic_comb() -> None:
     assert clean_and_filter.verify_harmonic_comb(np.zeros(sr, dtype=np.float32), sr=sr) is False
 
 
+def test_verify_harmonic_comb_ignores_main_lobe_on_lowpassed_piston() -> None:
+    sr = 16000
+    # Low-pass filtered 92.5 Hz comb mimics muffled piston/rotary exhaust with high r[8] main lobe
+    raw_comb = _make_harmonic_comb(92.5, sr=sr, max_hz=600.0)
+    lowpassed = physics_augment.apply_atmospheric_absorption(raw_comb, sr=sr, distance_m=2500.0)
+    r = clean_and_filter._normalized_autocorrelation(lowpassed, 400)
+    assert float(r[8]) > 0.7
+    assert clean_and_filter.verify_harmonic_comb(lowpassed, sr=sr, min_hz=50.0, max_hz=300.0) is True
+    assert clean_and_filter.verify_harmonic_comb(_make_harmonic_comb(500.0, sr=sr), sr=sr, min_hz=50.0, max_hz=300.0) is False
+
+
 def test_clean_directory_cli(tmp_path: Path) -> None:
     raw_dir = tmp_path / "raw"
     clean_dir = tmp_path / "clean"
@@ -305,6 +316,83 @@ def test_physics_augmentations() -> None:
     measured_noise = mixed - sig
     actual_snr = 20.0 * np.log10(np.linalg.norm(sig) / np.linalg.norm(measured_noise))
     assert np.isclose(actual_snr, 10.0, atol=1e-3)
+
+
+def test_class_aware_physics_augment() -> None:
+    sr = 16000
+    tone = np.sin(2.0 * np.pi * 440.0 * np.arange(sr, dtype=np.float64) / float(sr)).astype(np.float32)
+    rng = np.random.default_rng(12)
+
+    bg_aug, bg_params = physics_augment.augment_clip(
+        tone, sr=sr, rng=rng, class_name="Environmental_Background"
+    )
+    assert bg_aug.shape == tone.shape
+    assert bg_params["velocity_mps"] == 0.0
+    assert bg_params["flutter_hz"] is None
+
+    gc_aug, gc_params = physics_augment.augment_clip(
+        tone, sr=sr, rng=rng, class_name="Ground_Combustion_Noise"
+    )
+    assert gc_aug.shape == tone.shape
+    assert gc_params["velocity_mps"] == 0.0
+    assert gc_params["flutter_hz"] is None
+
+    # Multirotor should enable flutter on at least one draw out of 10
+    mr_flutters = [
+        physics_augment.augment_clip(tone, sr=sr, rng=rng, class_name="Multirotor_UAV")[1]["flutter_hz"]
+        for _ in range(10)
+    ]
+    assert any(f is not None for f in mr_flutters)
+
+
+def test_grouped_split_prevents_video_leakage(tmp_path: Path) -> None:
+    clean_dir = tmp_path / "clean"
+    aug_dir = tmp_path / "augmented"
+    sr = 16000
+    sig = _make_harmonic_comb(92.5, sr=sr)
+
+    # Create 3 distinct video IDs per class (2 frames each)
+    for cls_name in config.CLASSES:
+        (clean_dir / cls_name).mkdir(parents=True, exist_ok=True)
+        (aug_dir / cls_name).mkdir(parents=True, exist_ok=True)
+        for vid in ("vidA", "vidB", "vidC"):
+            for f_idx in range(2):
+                sf.write(
+                    clean_dir / cls_name / f"{vid}_frame_{f_idx:04d}.wav",
+                    sig,
+                    sr,
+                    subtype="PCM_16",
+                )
+                sf.write(
+                    aug_dir / cls_name / f"{vid}_frame_{f_idx:04d}_aug_00.wav",
+                    sig,
+                    sr,
+                    subtype="PCM_16",
+                )
+
+    _, labels, groups = train_mod.load_wav_directory_with_groups(clean_dir)
+    train_idx, val_idx, train_grps, val_grps = train_mod.grouped_stratified_split(
+        labels, groups, val_fraction=0.33, seed=42
+    )
+    assert train_idx.size > 0 and val_idx.size > 0
+    for cls_idx in range(len(config.CLASSES)):
+        assert train_grps[cls_idx].isdisjoint(val_grps[cls_idx])
+        assert len(val_grps[cls_idx]) == 1
+
+    # Train 1 epoch with augmented_dir: num_train_samples must exclude val video IDs
+    # Per class: 2 train vids * 2 clean frames + 2 train vids * 2 aug frames = 8 train samples -> 40 total
+    metrics = train_mod.train_model(
+        epochs=1,
+        batch_size=16,
+        use_synthetic=False,
+        data_dir=clean_dir,
+        augmented_dir=aug_dir,
+        output_ckpt=tmp_path / "ckpt.pt",
+        seed=42,
+    )
+    assert metrics["split_strategy"] == "grouped_by_source_video_id"
+    assert metrics["num_val_samples"] == 10  # 5 classes * 1 val vid * 2 frames
+    assert metrics["num_train_samples"] == 40  # 5 classes * 2 train vids * (2 clean + 2 aug)
 
 
 def test_dsp_contract_shape_and_values() -> None:

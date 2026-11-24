@@ -371,6 +371,31 @@ def _normalized_autocorrelation(x: np.ndarray, max_lag: int) -> np.ndarray:
     return (ac_raw / denom).astype(np.float64, copy=False)
 
 
+def _first_main_lobe_end(r: np.ndarray) -> int:
+    """Return index of first zero-crossing after lag 0, or first local minimum if always positive."""
+    n = r.size
+    for tau in range(1, n):
+        if r[tau] <= 0.0:
+            return tau
+    for tau in range(1, n - 1):
+        if r[tau] <= r[tau - 1] and r[tau] <= r[tau + 1]:
+            return tau
+    return 1
+
+
+def _local_maxima_indices(r: np.ndarray, lo: int, hi: int) -> np.ndarray:
+    """Return indices t in [lo, hi] that are strict local peaks r[t] > r[t-1] and r[t] >= r[t+1]."""
+    start = max(1, int(lo))
+    end = min(int(r.size) - 2, int(hi))
+    if end < start:
+        return np.empty(0, dtype=np.int64)
+    center = r[start : end + 1]
+    left = r[start - 1 : end]
+    right = r[start + 1 : end + 2]
+    rel = np.where((center > left) & (center >= right))[0]
+    return (start + rel).astype(np.int64, copy=False)
+
+
 def compute_harmonic_comb_metrics(
     frame: np.ndarray,
     sr: int = SAMPLE_RATE,
@@ -384,33 +409,46 @@ def compute_harmonic_comb_metrics(
     if x.size <= tau_max + 8 or float(np.std(x)) < 1e-6:
         return 0.0, 0.0
 
-    search_max = min(x.size - 2, max(tau_max, int(np.ceil(sr / 25.0))))
+    search_max = min(x.size - 2, max(tau_max + 2, int(np.ceil(sr / 25.0))))
     r = _normalized_autocorrelation(x, search_max)
 
-    band = r[tau_min : tau_max + 1]
-    if band.size == 0:
+    z0 = _first_main_lobe_end(r)
+    target_lo = max(tau_min, z0)
+    if target_lo > tau_max:
         return 0.0, 0.0
 
-    rel_peak = int(np.argmax(band))
-    peak_tau = tau_min + rel_peak
-    peak_corr = float(band[rel_peak])
+    target_peaks = _local_maxima_indices(r, target_lo, tau_max)
+    if target_peaks.size > 0:
+        best_pos = int(np.argmax(r[target_peaks]))
+        peak_tau = int(target_peaks[best_pos])
+        peak_corr = float(r[peak_tau])
+    else:
+        band = r[target_lo : tau_max + 1]
+        if band.size == 0:
+            return 0.0, 0.0
+        rel_peak = int(np.argmax(band))
+        peak_tau = target_lo + rel_peak
+        peak_corr = float(band[rel_peak])
+
     if peak_corr <= 0.0:
         return 0.0, peak_corr
 
-    # Reject signals whose true fundamental lies above max_hz (lags shorter than tau_min),
-    # which otherwise alias into [tau_min, tau_max] at integer period multiples.
-    fast_lo = max(2, int(np.floor(sr / 2000.0)))
-    fast_hi = max(fast_lo, int(np.floor(0.92 * tau_min)))
-    if fast_hi > fast_lo and float(np.max(r[fast_lo : fast_hi + 1])) >= max(0.85 * peak_corr, 0.25):
-        fast_tau = fast_lo + int(np.argmax(r[fast_lo : fast_hi + 1]))
-        return float(sr / fast_tau), 0.0
+    # Reject signals whose true periodic peak lies above max_hz (only inspecting true local
+    # maxima strictly past the zero-lag main lobe z0 so low-passed piston signals aren't clipped).
+    fast_lo = max(z0, int(np.floor(sr / 2000.0)))
+    fast_hi = min(tau_min - 1, int(np.floor(0.92 * tau_min)))
+    fast_peaks = _local_maxima_indices(r, fast_lo, fast_hi)
+    if fast_peaks.size > 0:
+        best_fast = int(fast_peaks[int(np.argmax(r[fast_peaks]))])
+        if float(r[best_fast]) >= max(0.85 * peak_corr, 0.25):
+            return float(sr / best_fast), 0.0
 
-    # Reject signals whose true fundamental lies below min_hz (lags longer than tau_max)
-    if search_max > tau_max:
-        slow_slice = r[tau_max + 1 : search_max + 1]
-        if slow_slice.size > 0 and float(np.max(slow_slice)) > 1.05 * peak_corr:
-            slow_tau = tau_max + 1 + int(np.argmax(slow_slice))
-            return float(sr / slow_tau), 0.0
+    # Reject signals whose true periodic peak lies below min_hz (lags longer than tau_max)
+    slow_peaks = _local_maxima_indices(r, max(z0, tau_max + 1), search_max - 1)
+    if slow_peaks.size > 0:
+        best_slow = int(slow_peaks[int(np.argmax(r[slow_peaks]))])
+        if float(r[best_slow]) > 1.05 * peak_corr:
+            return float(sr / best_slow), 0.0
 
     return float(sr / peak_tau), peak_corr
 

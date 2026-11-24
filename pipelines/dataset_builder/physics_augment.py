@@ -11,10 +11,59 @@ import numpy as np
 import soundfile as sf
 from scipy.interpolate import interp1d
 
-from config import AUGMENTED_DATA_DIR, CLEAN_DATA_DIR, SAMPLE_RATE
+from config import AUGMENTED_DATA_DIR, CLASSES, CLEAN_DATA_DIR, SAMPLE_RATE
 
 SPEED_OF_SOUND_MPS: float = 343.0
 DEFAULT_ALPHA0: float = 2.5e-9  # dB / (m * Hz^2) ISO 9613-1 inspired coefficient
+
+CLASS_AUGMENT_PROFILES: dict[str, dict[str, Any]] = {
+    "Shahed_Piston_UAV": {
+        "doppler_prob": 0.75,
+        "velocity_range": (20.0, 55.0),
+        "min_dist_range": (80.0, 400.0),
+        "distance_range": (50.0, 4000.0),
+        "include_flutter": False,
+        "snr_range": (3.0, 18.0),
+        "gain_range": (0.8, 1.2),
+    },
+    "Multirotor_UAV": {
+        "doppler_prob": 0.60,
+        "velocity_range": (5.0, 30.0),
+        "min_dist_range": (40.0, 250.0),
+        "distance_range": (30.0, 1500.0),
+        "include_flutter": True,
+        "snr_range": (3.0, 18.0),
+        "gain_range": (0.8, 1.2),
+    },
+    "FixedWing_Electric_UAV": {
+        "doppler_prob": 0.75,
+        "velocity_range": (15.0, 50.0),
+        "min_dist_range": (60.0, 350.0),
+        "distance_range": (50.0, 2500.0),
+        "include_flutter": False,
+        "snr_range": (3.0, 18.0),
+        "gain_range": (0.8, 1.2),
+    },
+    "Ground_Combustion_Noise": {
+        "doppler_prob": 0.0,
+        "velocity_range": (0.0, 0.0),
+        "min_dist_range": (50.0, 200.0),
+        "distance_range": (10.0, 500.0),
+        "include_flutter": False,
+        "snr_range": (4.0, 18.0),
+        "gain_range": (0.75, 1.25),
+    },
+    "Environmental_Background": {
+        "doppler_prob": 0.0,
+        "velocity_range": (0.0, 0.0),
+        "min_dist_range": (50.0, 200.0),
+        "distance_range": (10.0, 600.0),
+        "include_flutter": False,
+        "snr_range": (2.0, 18.0),
+        "gain_range": (0.6, 1.3),
+        "mix_bg_prob": 0.65,
+    },
+}
 
 
 def _to_float32_mono(audio: np.ndarray) -> np.ndarray:
@@ -150,15 +199,27 @@ def augment_clip(
     rng: np.random.Generator | None = None,
     noise_pool: list[np.ndarray] | None = None,
     include_flutter: bool = True,
+    class_name: str | None = None,
 ) -> tuple[np.ndarray, dict[str, Any]]:
-    """Apply a randomized physics augmentation pipeline and return (clip, params)."""
+    """Apply a randomized class-aware physics augmentation pipeline and return (clip, params)."""
     gen = rng if rng is not None else np.random.default_rng()
     out = _to_float32_mono(audio)
 
-    velocity = float(gen.uniform(15.0, 55.0))
-    min_dist = float(gen.uniform(80.0, 400.0))
-    t_center = float(gen.uniform(0.2, 0.8)) * (out.size / float(sr))
-    if gen.random() < 0.75:
+    profile = CLASS_AUGMENT_PROFILES.get(class_name) if class_name else None
+    doppler_prob = float(profile["doppler_prob"]) if profile else 0.75
+    vel_lo, vel_hi = profile["velocity_range"] if profile else (15.0, 55.0)
+    dist0_lo, dist0_hi = profile["min_dist_range"] if profile else (80.0, 400.0)
+    dist_lo, dist_hi = profile["distance_range"] if profile else (50.0, 4000.0)
+    use_flutter = bool(profile["include_flutter"]) if profile else bool(include_flutter)
+    snr_lo, snr_hi = profile["snr_range"] if profile else (-10.0, 15.0)
+    gain_lo, gain_hi = profile["gain_range"] if profile else (1.0, 1.0)
+    mix_bg_prob = float(profile.get("mix_bg_prob", 1.0)) if profile else 1.0
+
+    velocity = 0.0
+    min_dist = float(gen.uniform(dist0_lo, dist0_hi))
+    if doppler_prob > 0.0 and vel_hi > 0.0 and gen.random() < doppler_prob:
+        velocity = float(gen.uniform(vel_lo, vel_hi))
+        t_center = float(gen.uniform(0.2, 0.8)) * (out.size / float(sr))
         out = apply_doppler_shift(
             out,
             sr=sr,
@@ -166,39 +227,51 @@ def augment_clip(
             min_distance_m=min_dist,
             t_center=t_center,
         )
-    else:
-        velocity = 0.0
 
-    distance_m = float(gen.uniform(50.0, 4000.0))
+    distance_m = float(gen.uniform(dist_lo, dist_hi))
     out = apply_atmospheric_absorption(out, sr=sr, distance_m=distance_m)
 
     f_b = None
     depth = None
-    if include_flutter and gen.random() < 0.8:
+    if use_flutter and gen.random() < 0.8:
         f_b = float(gen.uniform(15.0, 40.0))
         depth = float(gen.uniform(0.05, 0.15))
         out = apply_blade_flutter(out, sr=sr, f_b=f_b, depth=depth, rng=gen)
 
-    snr_db = float(gen.uniform(-10.0, 15.0))
-    if noise_pool:
-        bg = noise_pool[int(gen.integers(0, len(noise_pool)))]
-    else:
-        bg = gen.normal(0.0, 0.02, size=out.size).astype(np.float32)
-    out = mix_background_noise(out, bg, snr_db=snr_db)
+    gain = float(gen.uniform(gain_lo, gain_hi)) if gain_hi > gain_lo else float(gain_lo)
+    if abs(gain - 1.0) > 1e-4:
+        out = (out * gain).astype(np.float32, copy=False)
+
+    snr_db: float | None = None
+    if gen.random() < mix_bg_prob:
+        snr_db = float(gen.uniform(snr_lo, snr_hi))
+        if noise_pool:
+            bg = noise_pool[int(gen.integers(0, len(noise_pool)))]
+        else:
+            bg = gen.normal(0.0, 0.02, size=out.size).astype(np.float32)
+        out = mix_background_noise(out, bg, snr_db=snr_db)
 
     peak = float(np.max(np.abs(out))) if out.size else 0.0
     if peak > 0.99:
         out = (0.95 * out / peak).astype(np.float32)
 
     params = {
+        "class_name": class_name,
         "distance_m": round(distance_m, 2),
         "velocity_mps": round(velocity, 2),
         "min_distance_m": round(min_dist, 2),
         "flutter_hz": round(f_b, 2) if f_b is not None else None,
         "flutter_depth": round(depth, 4) if depth is not None else None,
-        "snr_db": round(snr_db, 2),
+        "gain": round(gain, 4),
+        "snr_db": round(snr_db, 2) if snr_db is not None else None,
     }
     return out, params
+
+
+def _detect_class_from_rel_path(rel_parent: Path) -> str | None:
+    if rel_parent.parts and rel_parent.parts[0] in CLASSES:
+        return rel_parent.parts[0]
+    return None
 
 
 def batch_augment_directory(
@@ -206,9 +279,10 @@ def batch_augment_directory(
     output_dir: Path | str,
     background_dir: Path | str | None = None,
     augmentations_per_file: int = 4,
+    target_per_class: int | None = None,
     seed: int = 42,
 ) -> dict[str, Any]:
-    """Batch-augment clean WAV files into output_dir with physics perturbations."""
+    """Batch-augment clean WAV files into output_dir with class-aware physics perturbations."""
     in_root = Path(input_dir)
     out_root = Path(output_dir)
     out_root.mkdir(parents=True, exist_ok=True)
@@ -218,11 +292,20 @@ def batch_augment_directory(
     if background_dir is not None:
         bg_root = Path(background_dir)
         for bg_wav in sorted(bg_root.rglob("*.wav")):
+            lower_path = str(bg_wav).lower()
+            if "cessna" in lower_path or "helicopter" in lower_path:
+                continue
             bg_audio, _ = sf.read(bg_wav, dtype="float32")
             noise_pool.append(_to_float32_mono(bg_audio))
 
     wav_files = sorted(in_root.rglob("*.wav"))
+    class_file_counts: dict[str | None, int] = {}
+    for wav_path in wav_files:
+        cls_name = _detect_class_from_rel_path(wav_path.relative_to(in_root).parent)
+        class_file_counts[cls_name] = class_file_counts.get(cls_name, 0) + 1
+
     records: list[dict[str, Any]] = []
+    per_class_counts: dict[str, int] = {}
 
     for wav_path in wav_files:
         audio, orig_sr = sf.read(wav_path, dtype="float32")
@@ -233,15 +316,25 @@ def batch_augment_directory(
         target_dir = out_root / rel_parent
         target_dir.mkdir(parents=True, exist_ok=True)
 
-        for aug_idx in range(augmentations_per_file):
+        cls_name = _detect_class_from_rel_path(rel_parent)
+        if target_per_class is not None and target_per_class > 0:
+            cls_sources = max(1, class_file_counts.get(cls_name, 1))
+            n_augs = max(1, min(6, int(round(target_per_class / cls_sources))))
+        else:
+            n_augs = int(augmentations_per_file)
+
+        for aug_idx in range(n_augs):
             augmented, params = augment_clip(
                 mono,
                 sr=sr,
                 rng=rng,
                 noise_pool=noise_pool if noise_pool else None,
+                class_name=cls_name,
             )
             out_path = target_dir / f"{wav_path.stem}_aug_{aug_idx:02d}.wav"
             sf.write(out_path, np.clip(augmented, -1.0, 1.0), sr, subtype="PCM_16")
+            cls_key = cls_name or "unclassified"
+            per_class_counts[cls_key] = per_class_counts.get(cls_key, 0) + 1
             records.append(
                 {
                     "source": str(wav_path),
@@ -255,6 +348,8 @@ def batch_augment_directory(
         "output_dir": str(out_root),
         "source_count": len(wav_files),
         "augmented_count": len(records),
+        "target_per_class": target_per_class,
+        "per_class_augmented_counts": per_class_counts,
         "records": records,
     }
     (out_root / "augment_manifest.json").write_text(
@@ -265,12 +360,18 @@ def batch_augment_directory(
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Apply physics-based acoustic augmentations to WAV corpus."
+        description="Apply class-aware physics-based acoustic augmentations to WAV corpus."
     )
     parser.add_argument("--input-dir", type=Path, default=CLEAN_DATA_DIR)
     parser.add_argument("--output-dir", type=Path, default=AUGMENTED_DATA_DIR)
     parser.add_argument("--background-dir", type=Path, default=None)
     parser.add_argument("--augmentations-per-file", type=int, default=4)
+    parser.add_argument(
+        "--target-per-class",
+        type=int,
+        default=None,
+        help="Optional target augmented clips per class (caps per-file factor between 1 and 6).",
+    )
     parser.add_argument("--seed", type=int, default=42)
     return parser.parse_args(argv)
 
@@ -282,11 +383,13 @@ def main(argv: list[str] | None = None) -> int:
         output_dir=args.output_dir,
         background_dir=args.background_dir,
         augmentations_per_file=args.augmentations_per_file,
+        target_per_class=args.target_per_class,
         seed=args.seed,
     )
     print(
         f"Augmented {manifest['source_count']} files -> "
-        f"{manifest['augmented_count']} clips in {args.output_dir}"
+        f"{manifest['augmented_count']} clips in {args.output_dir} "
+        f"(per_class={manifest['per_class_augmented_counts']})"
     )
     return 0
 

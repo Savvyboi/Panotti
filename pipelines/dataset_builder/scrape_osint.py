@@ -375,6 +375,11 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.class_preset is not None:
         target_classes = list(CLASSES) if args.class_preset == "all" else [args.class_preset]
+        default_shared_archive = (
+            (Path(args.output_dir).parent if Path(args.output_dir).name in CLASSES else Path(args.output_dir))
+            / "global_download_archive.txt"
+        )
+        effective_archive = args.archive_file if args.archive_file is not None else default_shared_archive
         for cls_name in target_classes:
             cls_dir = (
                 Path(args.output_dir)
@@ -387,7 +392,7 @@ def main(argv: list[str] | None = None) -> int:
                 output_dir=cls_dir,
                 max_per_query=args.max_per_query,
                 dry_run=args.dry_run,
-                archive_file=args.archive_file,
+                archive_file=effective_archive,
                 ffmpeg_location=args.ffmpeg_location,
                 max_duration_sec=args.max_duration,
                 search_multiplier=args.search_multiplier,
