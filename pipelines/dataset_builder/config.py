@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # Shared DSP contract (MUST match apps/web/src/audio/MelSpectrogramExtractor.ts)
@@ -47,6 +48,115 @@ DEFAULT_OSINT_QUERIES: list[str] = [
     "paramotor flyby audio",
     "limbache L550E engine audio",
 ]
+
+CLASS_OSINT_QUERIES: dict[str, list[str]] = {
+    "Shahed_Piston_UAV": [
+        "shahed 136 drone sound",
+        "Limbach L550E engine",
+        "Geran 2 drone flyby",
+        "DLE 55 gas RC airplane flyby",
+        "DLE 111 boxer RC engine sound",
+        "DA 100 2 stroke RC plane flyby",
+        "3W 110 boxer engine sound",
+        "Saito FG 40 4 stroke RC plane sound",
+        "Rotax 912 ultralight flyby sound",
+        "Vittorazi Moster 185 paramotor sound",
+        "2 stroke paramotor flyby close",
+        "OS 49 PI Wankel rotary RC engine sound",
+        "Wankel rotary engine UAV test",
+    ],
+    "Multirotor_UAV": [
+        "DJI Mavic 3 Pro hovering sound test",
+        "DJI Phantom 4 flying audio",
+        "DJI Matrice 300 flying sound",
+        "5 inch FPV drone flyby sound raw audio",
+        "7 inch long range FPV drone sound",
+        "FPV quadcopter buzzing sound effect",
+        "DJI Agras T40 drone flying sound",
+        "heavy lift octocopter drone sound",
+    ],
+    "FixedWing_Electric_UAV": [
+        "FPV flying wing pusher motor sound",
+        "RC flying wing flyby raw audio",
+        "electric pusher RC plane sound",
+        "fixed wing electric UAV takeoff flight sound",
+        "brushless RC airplane flyby sound",
+    ],
+    "Ground_Combustion_Noise": [
+        "50cc 2 stroke moped exhaust sound clip",
+        "Vespa 2 stroke scooter revving sound",
+        "Stihl 2 stroke chainsaw cutting sound",
+        "2 stroke weed whacker string trimmer sound",
+        "2 stroke backpack leaf blower sound clip",
+        "gas lawnmower running sound effect",
+        "portable gas generator running sound clip",
+        "2 stroke dirt bike idle rev sound clip",
+    ],
+    "Environmental_Background": [
+        "strong wind howling sound effect short",
+        "heavy rain thunder sound effect short",
+        "highway cars passing sound effect",
+        "city street traffic ambient clip",
+        "air raid siren Ukraine sound clip",
+        "civil defense siren sound effect",
+        "Cessna 172 propeller flyover sound",
+        "helicopter rotor flying overhead sound",
+    ],
+}
+
+EXCLUDED_TITLE_KEYWORDS: tuple[str, ...] = (
+    "song",
+    "music video",
+    "official video",
+    "ocarina",
+    "sound of nature",
+    "podcast",
+    "interview",
+    "reaction",
+    "documentary",
+    "10 hours",
+    "8 hours",
+    "sleep sound",
+    "white noise for sleeping",
+)
+
+CLASS_CLEANING_PROFILES: dict[str, dict[str, Any]] = {
+    "Shahed_Piston_UAV": {
+        "comb_min_hz": 50.0,
+        "comb_max_hz": 300.0,
+        "comb_threshold": 0.22,
+        "require_comb": True,
+        "apply_siren_filter": True,
+    },
+    "Multirotor_UAV": {
+        "comb_min_hz": 80.0,
+        "comb_max_hz": 900.0,
+        "comb_threshold": 0.20,
+        "require_comb": True,
+        "apply_siren_filter": True,
+    },
+    "FixedWing_Electric_UAV": {
+        "comb_min_hz": 100.0,
+        "comb_max_hz": 1200.0,
+        "comb_threshold": 0.18,
+        "require_comb": True,
+        "apply_siren_filter": True,
+    },
+    "Ground_Combustion_Noise": {
+        "comb_min_hz": 40.0,
+        "comb_max_hz": 350.0,
+        "comb_threshold": 0.20,
+        "require_comb": True,
+        "apply_siren_filter": True,
+    },
+    "Environmental_Background": {
+        "comb_min_hz": 50.0,
+        "comb_max_hz": 300.0,
+        "comb_threshold": 0.25,
+        "require_comb": False,
+        "apply_siren_filter": False,
+    },
+}
 
 SIREN_GUNFIRE_LABELS: set[str] = {
     "Siren",

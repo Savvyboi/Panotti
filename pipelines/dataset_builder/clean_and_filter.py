@@ -14,6 +14,8 @@ import soundfile as sf
 from scipy import signal
 
 from config import (
+    CLASSES,
+    CLASS_CLEANING_PROFILES,
     CLEAN_DATA_DIR,
     EPS,
     NUM_SAMPLES,
@@ -452,14 +454,17 @@ def clean_directory(
     vocal_backend: str = "auto",
     siren_threshold: float = SIREN_GUNFIRE_THRESHOLD,
     comb_threshold: float = 0.25,
+    comb_min_hz: float = 50.0,
+    comb_max_hz: float = 300.0,
     require_comb: bool = True,
+    apply_siren_filter: bool = True,
 ) -> dict[str, Any]:
     """Clean all WAV files under input_dir and export validated 1s WAV clips to output_dir."""
     in_root = Path(input_dir)
     out_root = Path(output_dir)
     out_root.mkdir(parents=True, exist_ok=True)
 
-    siren_filter = SirenGunfireFilter(threshold=siren_threshold)
+    siren_filter = SirenGunfireFilter(threshold=siren_threshold) if apply_siren_filter else None
     wav_files = sorted(in_root.rglob("*.wav"))
 
     total_frames = 0
@@ -480,11 +485,15 @@ def clean_directory(
 
         for idx, frame in enumerate(frames):
             total_frames += 1
-            if siren_filter.should_reject(frame, sr=SAMPLE_RATE):
+            if siren_filter is not None and siren_filter.should_reject(frame, sr=SAMPLE_RATE):
                 rejected_siren += 1
                 continue
             if require_comb and not verify_harmonic_comb(
-                frame, sr=SAMPLE_RATE, min_hz=50.0, max_hz=300.0, threshold=comb_threshold
+                frame,
+                sr=SAMPLE_RATE,
+                min_hz=comb_min_hz,
+                max_hz=comb_max_hz,
+                threshold=comb_threshold,
             ):
                 rejected_comb += 1
                 continue
@@ -503,7 +512,10 @@ def clean_directory(
         "kept_frames": kept_frames,
         "rejected_siren_gunfire": rejected_siren,
         "rejected_harmonic_comb": rejected_comb,
-        "siren_backend": siren_filter.backend_name,
+        "comb_min_hz": comb_min_hz,
+        "comb_max_hz": comb_max_hz,
+        "apply_siren_filter": apply_siren_filter,
+        "siren_backend": siren_filter.backend_name if siren_filter is not None else "disabled",
         "kept_files": kept_paths,
     }
     (out_root / "clean_report.json").write_text(
@@ -519,29 +531,53 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--input-dir", type=Path, default=RAW_DATA_DIR)
     parser.add_argument("--output-dir", type=Path, default=CLEAN_DATA_DIR)
     parser.add_argument(
+        "--class-profile",
+        choices=list(CLASSES),
+        default=None,
+        help="Optional class cleaning profile from config.CLASS_CLEANING_PROFILES.",
+    )
+    parser.add_argument(
         "--vocal-backend",
         choices=["auto", "demucs", "spectral"],
         default="auto",
     )
     parser.add_argument("--siren-threshold", type=float, default=SIREN_GUNFIRE_THRESHOLD)
-    parser.add_argument("--comb-threshold", type=float, default=0.25)
+    parser.add_argument("--comb-threshold", type=float, default=None)
+    parser.add_argument("--comb-min-hz", type=float, default=None)
+    parser.add_argument("--comb-max-hz", type=float, default=None)
     parser.add_argument(
         "--skip-comb-check",
         action="store_true",
         help="Disable harmonic comb filtering (useful for pure background corpora).",
+    )
+    parser.add_argument(
+        "--skip-siren-filter",
+        action="store_true",
+        help="Disable siren/gunfire rejection (useful when preserving background sirens).",
     )
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    profile = CLASS_CLEANING_PROFILES[args.class_profile] if args.class_profile else {}
+
+    comb_min_hz = args.comb_min_hz if args.comb_min_hz is not None else float(profile.get("comb_min_hz", 50.0))
+    comb_max_hz = args.comb_max_hz if args.comb_max_hz is not None else float(profile.get("comb_max_hz", 300.0))
+    comb_threshold = args.comb_threshold if args.comb_threshold is not None else float(profile.get("comb_threshold", 0.25))
+    require_comb = False if args.skip_comb_check else bool(profile.get("require_comb", True))
+    apply_siren_filter = False if args.skip_siren_filter else bool(profile.get("apply_siren_filter", True))
+
     summary = clean_directory(
         input_dir=args.input_dir,
         output_dir=args.output_dir,
         vocal_backend=args.vocal_backend,
         siren_threshold=args.siren_threshold,
-        comb_threshold=args.comb_threshold,
-        require_comb=not args.skip_comb_check,
+        comb_threshold=comb_threshold,
+        comb_min_hz=comb_min_hz,
+        comb_max_hz=comb_max_hz,
+        require_comb=require_comb,
+        apply_siren_filter=apply_siren_filter,
     )
     print(
         f"Cleaned {summary['source_files']} files: kept {summary['kept_frames']}/{summary['total_frames']} "

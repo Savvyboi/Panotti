@@ -85,10 +85,20 @@ def test_scrape_osint_duration_and_live_filter(tmp_path: Path) -> None:
         max_duration_sec=300,
     )
     mf = opts["match_filter"]
-    assert mf({"duration": 45, "is_live": False}) is None
-    assert mf({"duration": 300, "is_live": False}) is None
-    assert mf({"duration": 301, "is_live": False}) is not None
-    assert mf({"duration": 20, "is_live": True}) is not None
+    assert mf({"duration": 45, "is_live": False, "title": "Shahed 136 flyby"}) is None
+    assert mf({"duration": 300, "is_live": False, "title": "DLE 111 boxer run"}) is None
+    assert mf({"duration": 301, "is_live": False, "title": "Long video"}) is not None
+    assert mf({"duration": 20, "is_live": True, "title": "Live stream"}) is not None
+    assert mf({"duration": 112, "is_live": False, "title": "Russian Song About Geran 2"}) is not None
+    assert mf({"duration": 36, "is_live": False, "title": "shahed 136 ocarina sound"}) is not None
+    assert mf({"duration": 60, "is_live": False, "title": "White Noise 10 Hours"}) is not None
+
+
+def test_class_presets_and_cleaning_profiles_cover_all_classes() -> None:
+    assert set(config.CLASS_OSINT_QUERIES.keys()) == set(config.CLASSES)
+    assert set(config.CLASS_CLEANING_PROFILES.keys()) == set(config.CLASSES)
+    for cls_name, queries in config.CLASS_OSINT_QUERIES.items():
+        assert len(queries) >= 5, f"{cls_name} should have >= 5 OSINT queries"
 
 
 def test_isolate_non_vocal_spectral_fallback() -> None:
@@ -201,6 +211,60 @@ def test_clean_directory_cli(tmp_path: Path) -> None:
     assert info.samplerate == 16000
     assert info.channels == 1
     assert info.subtype == "PCM_16"
+
+
+def test_clean_directory_class_profiles_multirotor_and_background(tmp_path: Path) -> None:
+    sr = 16000
+    t = np.arange(sr, dtype=np.float64) / float(sr)
+
+    # 450 Hz multirotor blade-pass harmonic comb is rejected by [50, 300] but kept by Multirotor_UAV [80, 900]
+    mr_dir = tmp_path / "raw_mr"
+    mr_dir.mkdir()
+    mr_sig = _make_harmonic_comb(450.0, sr=sr)
+    sf.write(mr_dir / "fpv.wav", mr_sig, sr, subtype="PCM_16")
+
+    out_mr = tmp_path / "clean_mr"
+    rc_mr = clean_and_filter.main(
+        [
+            "--input-dir",
+            str(mr_dir),
+            "--output-dir",
+            str(out_mr),
+            "--class-profile",
+            "Multirotor_UAV",
+            "--vocal-backend",
+            "spectral",
+        ]
+    )
+    assert rc_mr == 0
+    mr_report = json.loads((out_mr / "clean_report.json").read_text(encoding="utf-8"))
+    assert mr_report["kept_frames"] == 1
+    assert mr_report["comb_max_hz"] == 900.0
+
+    # Environmental_Background disables both comb check and siren rejection so sirens stay in negatives
+    bg_dir = tmp_path / "raw_bg"
+    bg_dir.mkdir()
+    f_inst = 1100.0 + 400.0 * np.sin(2.0 * np.pi * 1.5 * t)
+    siren = (0.6 * np.sin(2.0 * np.pi * np.cumsum(f_inst) / float(sr))).astype(np.float32)
+    sf.write(bg_dir / "siren_bg.wav", siren, sr, subtype="PCM_16")
+
+    out_bg = tmp_path / "clean_bg"
+    rc_bg = clean_and_filter.main(
+        [
+            "--input-dir",
+            str(bg_dir),
+            "--output-dir",
+            str(out_bg),
+            "--class-profile",
+            "Environmental_Background",
+            "--vocal-backend",
+            "spectral",
+        ]
+    )
+    assert rc_bg == 0
+    bg_report = json.loads((out_bg / "clean_report.json").read_text(encoding="utf-8"))
+    assert bg_report["kept_frames"] == 1
+    assert bg_report["apply_siren_filter"] is False
 
 
 def test_physics_augmentations() -> None:
