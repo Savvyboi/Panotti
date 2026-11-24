@@ -1,0 +1,16 @@
+{
+  "name": "Panotti Acoustic UAV Radar",
+  "short_name": "Panotti",
+  "description": "Edge WebGPU/WASM acoustic UAV detection node and H3 spatial mesh tracker",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#090d12",
+  "theme_color": "#090d12",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}

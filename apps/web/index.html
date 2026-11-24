@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark light" />
+    <meta name="theme-color" content="#090d12" />
+    <title>Panotti // Acoustic UAV Mesh Node</title>
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <script>
+      if (!window.crossOriginIsolated && 'serviceWorker' in navigator && window.isSecureContext) {
+        navigator.serviceWorker
+          .register('/coi-serviceworker.js')
+          .then((reg) => {
+            reg.addEventListener('updatefound', () => {
+              const worker = reg.installing;
+              if (!worker) return;
+              worker.addEventListener('statechange', () => {
+                if (
+                  worker.state === 'activated' &&
+                  !window.crossOriginIsolated &&
+                  !sessionStorage.getItem('panotti_coi_reloaded')
+                ) {
+                  sessionStorage.setItem('panotti_coi_reloaded', '1');
+                  window.location.reload();
+                }
+              });
+            });
+            if (
+              reg.active &&
+              !navigator.serviceWorker.controller &&
+              !sessionStorage.getItem('panotti_coi_reloaded')
+            ) {
+              sessionStorage.setItem('panotti_coi_reloaded', '1');
+              window.location.reload();
+            }
+          })
+          .catch(() => {});
+      }
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

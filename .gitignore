@@ -1,0 +1,28 @@
+# Dependencies & virtual environments
+node_modules/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Build & local runtime outputs
+dist/
+build/
+.wrangler/
+.dev.vars
+*.log
+.DS_Store
+Thumbs.db
+
+# Generated ORT WASM runtime assets (populated by apps/web setup script)
+apps/web/public/ort/
+
+# Dataset & training intermediates (keep exported INT8 ONNX model tracked)
+pipelines/dataset_builder/data/
+pipelines/dataset_builder/checkpoints/
+pipelines/dataset_builder/uav_detector_fp32.onnx
+pipelines/dataset_builder/*.onnx
+!apps/web/public/models/uav_detector_int8.onnx
+!apps/web/public/models/model_metadata.json

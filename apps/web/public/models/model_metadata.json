@@ -1,0 +1,51 @@
+{
+  "model_name": "AcousticMobileNetV3Small",
+  "exported_at": "2026-11-24T17:37:02.065000+00:00",
+  "classes": [
+    "Shahed_Piston_UAV",
+    "Multirotor_UAV",
+    "FixedWing_Electric_UAV",
+    "Ground_Combustion_Noise",
+    "Environmental_Background"
+  ],
+  "num_classes": 5,
+  "input_name": "input_spectrogram",
+  "output_name": "class_logits",
+  "input_shape": [
+    1,
+    1,
+    128,
+    100
+  ],
+  "opset_version": 17,
+  "quantization": "dynamic_quint8",
+  "fp32_size_bytes": 6104571,
+  "int8_size_bytes": 1712649,
+  "dsp": {
+    "sample_rate": 16000,
+    "n_fft": 512,
+    "hop_length": 160,
+    "num_frames": 100,
+    "n_mels": 128,
+    "fmin": 50.0,
+    "fmax": 4000.0,
+    "eps": 1e-06
+  },
+  "validation_metrics": {
+    "best_val_accuracy": 0.993333,
+    "shahed_val_accuracy": 1.0,
+    "per_class_accuracy": {
+      "Shahed_Piston_UAV": 1.0,
+      "Multirotor_UAV": 0.983333,
+      "FixedWing_Electric_UAV": 1.0,
+      "Ground_Combustion_Noise": 1.0,
+      "Environmental_Background": 0.983333
+    }
+  },
+  "parity": {
+    "fp32_max_abs_diff": 3.433e-05,
+    "int8_max_abs_diff": 1.569143,
+    "int8_prob_max_abs_diff": 0.000386,
+    "argmax_match_rate": 1.0
+  }
+}

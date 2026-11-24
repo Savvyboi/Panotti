@@ -1,0 +1,75 @@
+name: Test, Build, and Deploy Cloudflare Stack
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/web/**'
+      - 'services/mesh-hub/**'
+      - '.github/workflows/deploy_cloudflare.yml'
+
+jobs:
+  test-and-deploy-mesh:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/mesh-hub
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install and test mesh-hub
+        run: |
+          npm ci || npm install
+          npx tsc --noEmit
+          npm test
+          npx wrangler deploy --dry-run --outdir dist
+
+      - name: Deploy mesh-hub to Cloudflare Workers
+        if: ${{ secrets.CLOUDFLARE_API_TOKEN != '' && secrets.CLOUDFLARE_ACCOUNT_ID != '' }}
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: services/mesh-hub
+
+  test-and-deploy-web:
+    runs-on: ubuntu-latest
+    needs: test-and-deploy-mesh
+    defaults:
+      run:
+        working-directory: apps/web
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install, test, and build web PWA
+        env:
+          PANOTTI_PAGES_SAFE: '1'
+        run: |
+          npm ci || npm install
+          npx tsc --noEmit
+          npm test
+          npm run build
+
+      - name: Deploy web PWA to Cloudflare Pages
+        if: ${{ secrets.CLOUDFLARE_API_TOKEN != '' && secrets.CLOUDFLARE_ACCOUNT_ID != '' }}
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: apps/web
+          command: pages deploy dist --project-name=panotti-web

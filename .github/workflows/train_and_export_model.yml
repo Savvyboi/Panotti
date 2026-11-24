@@ -1,0 +1,67 @@
+name: Train and Export Acoustic UAV Model
+
+on:
+  workflow_dispatch:
+    inputs:
+      epochs:
+        description: Number of training epochs
+        required: false
+        default: '20'
+      samples_per_class:
+        description: Synthetic samples per class
+        required: false
+        default: '300'
+  push:
+    branches: [main]
+    paths:
+      - 'pipelines/dataset_builder/**'
+      - '.github/workflows/train_and_export_model.yml'
+
+jobs:
+  train-and-export:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: pipelines/dataset_builder
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install FFmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg libsndfile1
+
+      - name: Create venv and install dependencies
+        run: |
+          uv venv .venv
+          uv pip install --python .venv/bin/python -r requirements.txt
+
+      - name: Run dataset pipeline tests
+        run: .venv/bin/pytest -v
+
+      - name: Train AcousticMobileNet
+        run: |
+          .venv/bin/python train.py --synthetic \
+            --epochs "${{ github.event.inputs.epochs || '20' }}" \
+            --num-samples-per-class "${{ github.event.inputs.samples_per_class || '300' }}"
+
+      - name: Export quantized INT8 ONNX model
+        run: |
+          .venv/bin/python export_onnx.py
+          python3 -c "import os; p='../../apps/web/public/models/uav_detector_int8.onnx'; sz=os.path.getsize(p); print(f'ONNX size: {sz/1e6:.2f} MB'); assert sz < 8 * 1024 * 1024"
+
+      - name: Upload ONNX model artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: uav-detector-int8-onnx
+          path: |
+            apps/web/public/models/uav_detector_int8.onnx
+            apps/web/public/models/model_metadata.json
