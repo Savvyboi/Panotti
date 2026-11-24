@@ -58,12 +58,52 @@ def transcode_to_16k_mono_wav(
     return output_path
 
 
+class _YdlLogCollector:
+    """Collects yt-dlp warnings and errors without flooding stdout."""
+
+    def __init__(self) -> None:
+        self.warnings: list[str] = []
+        self.errors: list[str] = []
+
+    def debug(self, _msg: str) -> None:
+        return None
+
+    def info(self, _msg: str) -> None:
+        return None
+
+    def warning(self, msg: str) -> None:
+        self.warnings.append(str(msg))
+
+    def error(self, msg: str) -> None:
+        self.errors.append(str(msg))
+
+
+def build_duration_filter(max_duration_sec: int = 300):
+    """Return a yt-dlp match_filter skipping livestreams and clips over max_duration_sec."""
+
+    def _match_filter(info: dict[str, Any], *, incomplete: bool = False) -> str | None:
+        if info.get("is_live"):
+            return "Skipping live stream"
+        duration = info.get("duration")
+        if (
+            max_duration_sec > 0
+            and isinstance(duration, (int, float))
+            and duration > max_duration_sec
+        ):
+            return f"Duration {duration}s exceeds max_duration_sec={max_duration_sec}s"
+        return None
+
+    return _match_filter
+
+
 def build_yt_dlp_options(
     query_dir: Path,
     archive_path: Path,
     ffmpeg_location: str | None = None,
+    max_duration_sec: int = 300,
+    logger: Any | None = None,
 ) -> dict[str, Any]:
-    """Construct yt-dlp configuration dict enforcing WAV extraction + archive."""
+    """Construct yt-dlp configuration dict enforcing WAV extraction + archive + duration filter."""
     opts: dict[str, Any] = {
         "format": "bestaudio/best",
         "outtmpl": str(query_dir / "%(id)s.%(ext)s"),
@@ -71,7 +111,8 @@ def build_yt_dlp_options(
         "noplaylist": True,
         "ignoreerrors": True,
         "quiet": True,
-        "no_warnings": True,
+        "no_warnings": False,
+        "match_filter": build_duration_filter(max_duration_sec),
         "postprocessors": [
             {
                 "key": "FFmpegExtractAudio",
@@ -89,6 +130,8 @@ def build_yt_dlp_options(
             ]
         },
     }
+    if logger is not None:
+        opts["logger"] = logger
     if ffmpeg_location:
         opts["ffmpeg_location"] = str(Path(ffmpeg_location).parent) if Path(ffmpeg_location).is_file() else ffmpeg_location
     return opts
@@ -102,6 +145,7 @@ def scrape_queries(
     archive_file: Path | str | None = None,
     manifest_path: Path | str | None = None,
     ffmpeg_location: str | None = None,
+    max_duration_sec: int = 300,
 ) -> dict[str, Any]:
     """Download or plan OSINT acoustic downloads and emit a JSON manifest."""
     query_list = list(queries) if queries else list(DEFAULT_OSINT_QUERIES)
@@ -132,20 +176,26 @@ def scrape_queries(
                     "slug": slug,
                     "search_spec": search_spec,
                     "max_per_query": max_per_query,
+                    "max_duration_sec": max_duration_sec,
                     "output_dir": str(query_dir),
                     "archive_file": str(archive),
                     "status": "dry_run_planned",
                     "files": [],
+                    "warnings": [],
+                    "errors": [],
                 }
             )
             continue
 
         import yt_dlp  # Lazy import so dry-run & tests stay lightweight
 
+        ydl_logger = _YdlLogCollector()
         ydl_opts = build_yt_dlp_options(
             query_dir=query_dir,
             archive_path=archive,
             ffmpeg_location=ffmpeg_bin,
+            max_duration_sec=max_duration_sec,
+            logger=ydl_logger,
         )
         downloaded_files: list[dict[str, Any]] = []
 
@@ -180,10 +230,13 @@ def scrape_queries(
                 "slug": slug,
                 "search_spec": search_spec,
                 "max_per_query": max_per_query,
+                "max_duration_sec": max_duration_sec,
                 "output_dir": str(query_dir),
                 "archive_file": str(archive),
-                "status": "completed",
+                "status": "completed" if not ydl_logger.errors else "completed_with_errors",
                 "files": downloaded_files,
+                "warnings": ydl_logger.warnings,
+                "errors": ydl_logger.errors,
             }
         )
 
@@ -200,6 +253,7 @@ def scrape_queries(
         "archive_file": str(archive),
         "queries": query_list,
         "max_per_query": max_per_query,
+        "max_duration_sec": max_duration_sec,
         "entries": entries,
     }
     manifest_file.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
@@ -227,6 +281,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=int,
         default=5,
         help="Maximum videos to download per query.",
+    )
+    parser.add_argument(
+        "--max-duration",
+        type=int,
+        default=300,
+        help="Maximum clip duration in seconds (0 disables duration cap; livestreams always skipped).",
     )
     parser.add_argument(
         "--dry-run",
@@ -257,11 +317,14 @@ def main(argv: list[str] | None = None) -> int:
         dry_run=args.dry_run,
         archive_file=args.archive_file,
         ffmpeg_location=args.ffmpeg_location,
+        max_duration_sec=args.max_duration,
     )
     mode = "dry-run" if manifest["dry_run"] else "live"
+    total_files = sum(len(entry.get("files", [])) for entry in manifest["entries"])
+    total_errors = sum(len(entry.get("errors", [])) for entry in manifest["entries"])
     print(
         f"[{mode}] Wrote manifest for {len(manifest['entries'])} queries "
-        f"to {Path(args.output_dir) / 'manifest.json'}"
+        f"({total_files} files, {total_errors} errors) to {Path(args.output_dir) / 'manifest.json'}"
     )
     return 0
 

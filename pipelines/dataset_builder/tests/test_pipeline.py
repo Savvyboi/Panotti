@@ -73,8 +73,22 @@ def test_scrape_osint_dry_run_manifest(tmp_path: Path) -> None:
     assert manifest["audio_format"]["channels"] == 1
     assert manifest["audio_format"]["subtype"] == "PCM_16"
     assert manifest["queries"] == config.DEFAULT_OSINT_QUERIES
+    assert manifest["max_duration_sec"] == 300
     assert len(manifest["entries"]) == len(config.DEFAULT_OSINT_QUERIES)
     assert all(entry["status"] == "dry_run_planned" for entry in manifest["entries"])
+
+
+def test_scrape_osint_duration_and_live_filter(tmp_path: Path) -> None:
+    opts = scrape_osint.build_yt_dlp_options(
+        query_dir=tmp_path,
+        archive_path=tmp_path / "archive.txt",
+        max_duration_sec=300,
+    )
+    mf = opts["match_filter"]
+    assert mf({"duration": 45, "is_live": False}) is None
+    assert mf({"duration": 300, "is_live": False}) is None
+    assert mf({"duration": 301, "is_live": False}) is not None
+    assert mf({"duration": 20, "is_live": True}) is not None
 
 
 def test_isolate_non_vocal_spectral_fallback() -> None:
